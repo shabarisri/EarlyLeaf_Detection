@@ -1,0 +1,155 @@
+#importing libraries
+import numpy as np
+import os
+import tensorflow as tf
+from tensorflow.keras import layers, models, optimizers
+from tensorflow.keras.optimizers.legacy import Adam
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+
+# Define parameters
+IMAGE_SIZE = (64, 64)
+BATCH_SIZE = 300
+EPOCHS = 10
+LATENT_DIM = 100
+NUM_SAMPLES = 2000  # Number of samples to train on
+DATA_DIR = 'Path to the dataset'
+
+# Create data generators
+datagen = ImageDataGenerator(
+    rescale=1.0/255,
+    validation_split=0.5
+)
+
+train_generator = datagen.flow_from_directory(
+    DATA_DIR,
+    target_size=IMAGE_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode=None,
+    subset='training'
+)
+
+
+# Discriminator
+def build_discriminator(input_shape):
+    model = models.Sequential([
+        layers.Conv2D(32, (3, 3), strides=(2, 2), padding='same', input_shape=input_shape),
+        layers.LeakyReLU(alpha=0.2),
+        layers.Dropout(0.25),
+        layers.Conv2D(64, (3, 3), strides=(2, 2), padding='same'),
+        layers.ZeroPadding2D(padding=((0,1),(0,1))),
+        layers.BatchNormalization(momentum=0.8),
+        layers.LeakyReLU(alpha=0.2),
+        layers.Dropout(0.25),
+        layers.Conv2D(128, (3, 3), strides=(2, 2), padding='same'),
+        layers.BatchNormalization(momentum=0.8),
+        layers.LeakyReLU(alpha=0.2),
+        layers.Dropout(0.25),
+        layers.Conv2D(256, (3, 3), strides=(1, 1), padding='same'),
+        layers.BatchNormalization(momentum=0.8),
+        layers.LeakyReLU(alpha=0.2),
+        layers.Dropout(0.25),
+        layers.Flatten(),
+        layers.Dense(1, activation='sigmoid')
+    ])
+    return model
+discriminator = build_discriminator(input_shape=(*IMAGE_SIZE, 3))
+discriminator.compile(loss='binary_crossentropy', optimizer=optimizers.Adam(0.001, 0.5), metrics=['accuracy'])
+
+# Generator
+def build_generator(latent_dim):
+    model = models.Sequential([
+        layers.Dense(128 * 16 * 16, activation="relu", input_dim=latent_dim),
+        layers.Reshape((16, 16, 128)),
+        layers.UpSampling2D(),
+        layers.Conv2D(128, kernel_size=3, padding="same"),
+        layers.BatchNormalization(momentum=0.8),
+        layers.Activation("relu"),
+        layers.UpSampling2D(),
+        layers.Conv2D(64, kernel_size=3, padding="same"),
+        layers.BatchNormalization(momentum=0.8),
+        layers.Activation("relu"),
+        layers.Conv2D(3, kernel_size=3, padding="same"),
+        layers.Activation("tanh")
+    ])
+    return model
+generator = build_generator(latent_dim=LATENT_DIM)
+
+# Combined model
+z = layers.Input(shape=(LATENT_DIM,))
+img = generator(z)
+discriminator.trainable = False
+validity = discriminator(img)
+
+combined = models.Model(z, validity)
+combined.compile(loss='binary_crossentropy', optimizer=optimizers.Adam(0.001, 0.5))
+
+# Adjust learning rate for both generator and discriminator
+discriminator_optimizer = optimizers.Adam(0.001, 0.5)
+generator_optimizer = optimizers.Adam(0.001, 0.5)
+
+# Adjust model architectures, batch size, and other parameters as needed
+
+for epoch in range(EPOCHS):
+    for _ in range(NUM_SAMPLES // BATCH_SIZE):
+        # Train discriminator
+        real_imgs = next(train_generator)
+        real_imgs = real_imgs[np.random.randint(0, real_imgs.shape[0], BATCH_SIZE)]
+
+        noise = np.random.normal(0, 1, (BATCH_SIZE, LATENT_DIM))
+        gen_imgs = generator.predict(noise)
+
+        d_loss_real = discriminator.train_on_batch(real_imgs, np.ones((BATCH_SIZE, 1)))
+        d_loss_fake = discriminator.train_on_batch(gen_imgs, np.zeros((BATCH_SIZE, 1)))
+        d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+
+        # Train generator
+        noise = np.random.normal(0, 1, (BATCH_SIZE, LATENT_DIM))
+        g_loss = combined.train_on_batch(noise, np.ones((BATCH_SIZE, 1)))
+
+    # Print progress
+    print(f"Epoch {epoch}, D Loss: {d_loss[0]}, G Loss: {g_loss}")
+
+# Training
+for epoch in range(EPOCHS):
+    for _ in range(NUM_SAMPLES // BATCH_SIZE):
+        # Train discriminator
+        real_imgs = next(train_generator)
+        real_imgs = real_imgs[np.random.randint(0, real_imgs.shape[0], BATCH_SIZE)]
+
+        noise = np.random.normal(0, 1, (BATCH_SIZE, LATENT_DIM))
+        gen_imgs = generator.predict(noise)
+
+        d_loss_real = discriminator.train_on_batch(real_imgs, np.ones((BATCH_SIZE, 1)))
+        d_loss_fake = discriminator.train_on_batch(gen_imgs, np.zeros((BATCH_SIZE, 1)))
+        d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+
+        # Train generator
+        noise = np.random.normal(0, 1, (BATCH_SIZE, LATENT_DIM))
+        g_loss = combined.train_on_batch(noise, np.ones((BATCH_SIZE, 1)))
+
+    # Print progress
+    print(f"Epoch {epoch}, D Loss: {d_loss[0]}, G Loss: {g_loss}")
+
+
+# Save generated images
+generated_images = generate_images(generator, LATENT_DIM, num_samples=5)
+for i, image in enumerate(generated_images):
+    tf.keras.preprocessing.image.save_img(f"generated_image_{i}.png", image)
+
+#Generated Images 
+import matplotlib.pyplot as plt
+
+def plot_images(images, num_cols=5):
+    num_images = len(images)
+    num_rows = num_images // num_cols + int(num_images % num_cols != 0)
+    plt.figure(figsize=(num_cols * 3, num_rows * 3))
+    for i in range(num_images):
+        plt.subplot(num_rows, num_cols, i + 1)
+        plt.imshow(images[i])
+        plt.axis('off')
+    plt.show()
+
+
+# Assuming 'generated_images is a numpy array of generated images
+plot_images(generated_images)
